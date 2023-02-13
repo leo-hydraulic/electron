@@ -8,6 +8,8 @@
 #include <string>
 #include <utility>
 
+#import <ServiceManagement/ServiceManagement.h>
+
 #include "base/i18n/rtl.h"
 #include "base/mac/bundle_locations.h"
 #include "base/mac/foundation_util.h"
@@ -364,27 +366,63 @@ Browser::LoginItemSettings Browser::GetLoginItemSettings(
     const LoginItemSettings& options) {
   LoginItemSettings settings;
 #if IS_MAS_BUILD()
-  settings.open_at_login = platform_util::GetLoginItemEnabled();
+  const std::string enabled =
+      platform_util::GetLoginItemEnabled(options.type, options.name);
+  settings.open_at_login = enabled == "enabled";
+  if (@available(macOS 13, *))
+    settings.status = enabled;
 #else
-  settings.open_at_login = CheckLoginItemStatus(&settings.open_as_hidden);
-  settings.restore_state = base::mac::WasLaunchedAsLoginItemRestoreState();
-  settings.opened_at_login = base::mac::WasLaunchedAsLoginOrResumeItem();
-  settings.opened_as_hidden = base::mac::WasLaunchedAsHiddenLoginItem();
+  bool old_open_at_login = CheckLoginItemStatus(&settings.open_as_hidden);
+  if (@available(macOS 13, *)) {
+    // If the app was previously set as a login item with the old API
+    // report login settings via the old API.
+    if (old_open_at_login) {
+      settings.open_at_login = old_open_at_login;
+      settings.restore_state = base::mac::WasLaunchedAsLoginItemRestoreState();
+      settings.opened_at_login = base::mac::WasLaunchedAsLoginOrResumeItem();
+      settings.opened_as_hidden = base::mac::WasLaunchedAsHiddenLoginItem();
+    } else {
+      const std::string enabled =
+          platform_util::GetLoginItemEnabled(options.type, options.name);
+      settings.open_at_login = enabled == "enabled";
+      settings.status = enabled;
+    }
+  } else {
+    settings.open_at_login = old_open_at_login;
+    settings.restore_state = base::mac::WasLaunchedAsLoginItemRestoreState();
+    settings.opened_at_login = base::mac::WasLaunchedAsLoginOrResumeItem();
+    settings.opened_as_hidden = base::mac::WasLaunchedAsHiddenLoginItem();
+  }
 #endif
   return settings;
 }
 
 void Browser::SetLoginItemSettings(LoginItemSettings settings) {
 #if IS_MAS_BUILD()
-  if (!platform_util::SetLoginItemEnabled(settings.open_at_login)) {
-    LOG(ERROR) << "Unable to set login item enabled on sandboxed app.";
-  }
+  platform_util::SetLoginItemEnabled(settings.type, settings.name,
+                                     settings.open_at_login);
 #else
-  if (settings.open_at_login) {
-    base::mac::AddToLoginItems(base::mac::MainBundlePath(),
-                               settings.open_as_hidden);
+  const base::FilePath bundle_path = base::mac::MainBundlePath();
+  if (@available(macOS 13, *)) {
+    // If the app was previously set as a login item with the old API, disable
+    // via old API before enabling with the new API.
+    bool previously_enabled = CheckLoginItemStatus(&settings.open_as_hidden);
+    if (previously_enabled) {
+      base::mac::RemoveFromLoginItems(bundle_path);
+      if (settings.open_at_login) {
+        platform_util::SetLoginItemEnabled(settings.type, settings.name,
+                                           settings.open_at_login);
+      }
+    } else {
+      platform_util::SetLoginItemEnabled(settings.type, settings.name,
+                                         settings.open_at_login);
+    }
   } else {
-    base::mac::RemoveFromLoginItems(base::mac::MainBundlePath());
+    if (settings.open_at_login) {
+      base::mac::AddToLoginItems(bundle_path, settings.open_as_hidden);
+    } else {
+      base::mac::RemoveFromLoginItems(bundle_path);
+    }
   }
 #endif
 }
