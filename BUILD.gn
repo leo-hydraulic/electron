@@ -1138,6 +1138,8 @@ if (is_mac) {
     ldflags = [
       "-rpath",
       "@executable_path/../Frameworks",
+      "-Wl,-headerpad",
+      "-Wl,0xFF",
     ]
     extra_configs = [ "//electron/build/config:mas_build" ]
   }
